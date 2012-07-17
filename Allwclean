@@ -1,0 +1,12 @@
+#!/bin/sh
+set -x
+
+# Clean out existing object files
+wclean MomentOfFluid
+
+wclean initAlphaField
+wclean testMomentOfFluid
+
+# Wipe out all lnInclude directories and re-link
+wcleanLnIncludeAll
+

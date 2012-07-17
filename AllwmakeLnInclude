@@ -1,0 +1,7 @@
+#!/bin/sh
+set -x
+
+wmakeLnInclude MomentOfFluid
+
+wmakeLnInclude initAlphaField
+wmakeLnInclude testMomentOfFluid
