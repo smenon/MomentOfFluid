@@ -47,13 +47,8 @@ SourceFiles
 #ifndef MomentOfFluid_H
 #define MomentOfFluid_H
 
-
-#include "point.H"
-#include "label.H"
-#include "Tuple2.H"
+#include "MoF.H"
 #include "vector2D.H"
-#include "FixedList.H"
-#include "DynamicList.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -73,21 +68,14 @@ class MomentOfFluid
         //- Constant reference to mesh
         const polyMesh& mesh_;
 
-        //- Hessian-normal plane definition
-        typedef Tuple2<vector, scalar> hPlane;
-
-        //- Triangle / Tetrahedron definition
-        typedef FixedList<point, 3> Triangle;
-        typedef FixedList<point, 4> Tetrahedron;
-
         //- Tet decomposition of original cell
-        DynamicList<Tetrahedron> tetDecomp_;
+        DynamicList<MoF::Tetrahedron> tetDecomp_;
 
         //- All intersection tets
-        DynamicList<Tetrahedron> allTets_;
+        DynamicList<MoF::Tetrahedron> allTets_;
 
         //- Triangulated surfaces
-        DynamicList<Triangle> allTris_;
+        DynamicList<MoF::Triangle> allTris_;
 
     // Private Member Functions
 
@@ -97,23 +85,54 @@ class MomentOfFluid
         //- Disallow default bitwise assignment
         void operator=(const MomentOfFluid&);
 
-        //- Split and decompose
-        void splitAndDecompose
-        (
-            const hPlane& clipPlane,
-            const Tetrahedron& tet
-        );
-
         // Extract triangles using plane info
         void extractTriangulation
         (
             const vector& xC,
-            const hPlane& clipPlane,
-            const Tetrahedron& tetra
+            const MoF::hPlane& clipPlane,
+            const MoF::Tetrahedron& tetra
         );
 
-        //- Evaluate and return volume / centroid
-        void getVolumeAndCentre(scalar& volume, vector& centre) const;
+        // Evaluate for intersections
+        scalar evaluate
+        (
+            const MoF::hPlane& plane,
+            vector& centre
+        );
+
+        // Function evaluation routine
+        scalar evaluateFunctional
+        (
+            const label& cellIndex,
+            const scalar& fraction,
+            const vector& refCentre,
+            const vector2D& x,
+            vector2D& fnGrad,
+            vector& centre,
+            scalar& distance
+        );
+
+        // Match specified volume fraction with supplied normal
+        scalar matchFraction
+        (
+            const label& cellIndex,
+            const scalar& fraction,
+            const vector& normal,
+            vector& centre,
+            scalar& span,
+            scalar* gdMin = NULL,
+            scalar* gdMax = NULL
+        );
+
+        // Optimize for normal / centroid given a reference value
+        void optimizeCentroid
+        (
+            const label& cellIndex,
+            const scalar& fraction,
+            const vector& refCentre,
+            vector& normal,
+            vector& centre
+        );
 
         // Class used during optimization
         class optInfo
@@ -229,18 +248,6 @@ class MomentOfFluid
             );
         }
 
-        // Function evaluation routine
-        scalar evaluateFunctional
-        (
-            const label& cellIndex,
-            const scalar& fraction,
-            const vector& refCentre,
-            const vector2D& x,
-            vector2D& fnGrad,
-            vector& centre,
-            scalar& distance
-        );
-
         // Helper function for line-search
         scalar minimizeAlpha
         (
@@ -298,47 +305,14 @@ public:
 
     // Member Functions
 
-        // Decompose original cell into tetrahedra
-        void decomposeCell
-        (
-            const label& cellIndex
-        );
+        // Interface handling
 
-        // Evaluate for intersections
-        scalar evaluate
-        (
-            const Tuple2<vector, scalar>& plane,
-            vector& centre
-        );
-
-        // Match specified volume fraction with supplied normal
-        scalar matchFraction
-        (
-            const label& cellIndex,
-            const scalar& fraction,
-            const vector& normal,
-            vector& centre,
-            scalar& span,
-            scalar* gdMin = NULL,
-            scalar* gdMax = NULL
-        );
-
-        // Optimize for normal / centroid given a reference value
-        void optimizeCentroid
-        (
-            const label& cellIndex,
-            const scalar& fraction,
-            const vector& refCentre,
-            vector& normal,
-            vector& centre
-        );
-
-        // Reconstruct the interface
-        void constructInterface
-        (
-            const scalarField& fractions,
-            const vectorField& refCentres
-        );
+            // Reconstruct the interface
+            void constructInterface
+            (
+                const scalarField& fractions,
+                const vectorField& refCentres
+            );
 
         // Post-processing
 

@@ -26,18 +26,12 @@ Class
     tetIntersection
 
 Description
-    Implementation of the tetrahedron intersection algorithm given in:
+    Tetrahedron-tetrahedron intersection
 
-    D.H. Eberly, 3D Game Engine Design: A Practical Approach to Real-time
-    Computer Graphics, Morgan Kaufmann, 2001.
-
-    Geometric Tools, LLC
-    Distributed under the Boost Software License, Version 1.0.
-    http://www.boost.org/LICENSE_1_0.txt
-
-Implemented by
+Author
     Sandeep Menon
     University of Massachusetts Amherst
+    All rights reserved
 
 SourceFiles
     tetIntersectionI.H
@@ -47,11 +41,7 @@ SourceFiles
 #ifndef tetIntersection_H
 #define tetIntersection_H
 
-#include "point.H"
-#include "label.H"
-#include "Tuple2.H"
-#include "FixedList.H"
-#include "DynamicList.H"
+#include "MoF.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -67,21 +57,18 @@ class tetIntersection
     // Private data
 
         //- Const reference to clipping tetrahedron
-        const FixedList<point, 4>& clipTet_;
+        const MoF::Tetrahedron& clipTet_;
 
-        //- Hessian-normal plane definition
-        typedef Tuple2<vector, scalar> hPlane;
-
-        FixedList<hPlane, 4> clipPlanes_;
+        FixedList<MoF::hPlane, 4> clipPlanes_;
 
         //- Magnitude of clipping tetrahedron
         scalar clipTetMag_;
 
         //- Tetrahedra used as temporaries
-        DynamicList<FixedList<point, 4> > inside_;
+        DynamicList<MoF::Tetrahedron> inside_;
 
         //- All intersection tets
-        DynamicList<FixedList<point, 4> > allTets_;
+        DynamicList<MoF::Tetrahedron> allTets_;
 
     // Private Member Functions
 
@@ -94,20 +81,12 @@ class tetIntersection
         //- Compute clip-planes
         inline void computeClipPlanes();
 
-        //- Split and decompose
-        inline void splitAndDecompose
-        (
-            const label tetPlaneIndex,
-            FixedList<point, 4>& tetra,
-            DynamicList<FixedList<point, 4> >& decompTets
-        ) const;
-
 public:
 
     // Constructors
 
         //- Construct from components
-        inline tetIntersection(const FixedList<point, 4>& clipTet);
+        inline tetIntersection(const MoF::Tetrahedron& clipTet);
 
 
     // Destructor
@@ -121,13 +100,10 @@ public:
         inline scalar clipTetMag() const;
 
         //- Evaluate for intersections against input tetrahedron
-        inline bool evaluate(const FixedList<point, 4>& subjectTet);
+        inline bool evaluate(const MoF::Tetrahedron& subjectTet);
 
         //- Return intersections
-        inline const DynamicList<FixedList<point, 4> >& getIntersection() const;
-
-        //- Evaluate and return volume / centroid
-        inline void getVolumeAndCentre(scalar& volume, vector& centre) const;
+        inline const DynamicList<MoF::Tetrahedron>& getIntersection() const;
 };
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //

@@ -45,100 +45,6 @@ using namespace Foam;
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-void unitTests(const polyMesh& mesh)
-{
-    vector refCentre;
-    label testIndex = 12;
-    vector testNormal(0.8427, 0.4815, 0.2408);
-
-    // Normalize
-    testNormal /= mag(testNormal);
-
-    vector cellCentre = mesh.cellCentres()[testIndex];
-    scalar cellVolume = mesh.cellVolumes()[testIndex];
-
-    Info<< " Initial: " << nl
-        << "  Normal: "
-        << testNormal << nl
-        << "  Cell Volume: " << cellVolume << nl
-        << "  Cell Labels: "
-        << mesh.cells()[testIndex].labels(mesh.faces()) << nl
-        << "  Cell Points: "
-        << mesh.cells()[testIndex].points(mesh.faces(), mesh.points()) << nl
-        << endl;
-
-    // Construct intersector
-    MomentOfFluid mof(mesh);
-
-    // Decompose original cell into tetrahedra
-    mof.decomposeCell(testIndex);
-
-    // Evaluate with specified plane
-    scalar volume =
-    (
-        mof.evaluate
-        (
-            Tuple2<vector, scalar>
-            (
-                testNormal,
-                0.0
-            ),
-            refCentre
-        )
-    );
-
-    refCentre += cellCentre;
-
-    scalar fraction = (volume / cellVolume);
-
-//    // Match volume fraction with supplied normal
-//    scalar span;
-//
-//    scalar d =
-//    (
-//        mof.matchFraction
-//        (
-//            testIndex,
-//            testFraction,
-//            testNormal,
-//            centre,
-//            span
-//        )
-//    );
-//
-//    scalar h = (0.01 * span);
-//    scalar dMin = (d - h), dMax = (d + h);
-//
-//    mof.matchFraction
-//    (
-//        testIndex,
-//        testFraction,
-//        testNormal,
-//        centre,
-//        span,
-//        &dMin,
-//        &dMax
-//    );
-
-    vector normal = vector::zero, centre = vector::zero;
-
-    mof.optimizeCentroid
-    (
-        testIndex,
-        fraction,
-        refCentre,
-        normal,
-        centre
-    );
-
-    Info<< " Final: " << nl
-        << "  Normal: " << normal << nl
-        << "  Centre: " << centre << nl
-        << endl;
-
-    mof.outputPlane(centre, normal, testIndex);
-}
-
 // Main program:
 
 int main(int argc, char *argv[])
@@ -146,9 +52,6 @@ int main(int argc, char *argv[])
 #   include "setRootCase.H"
 #   include "createTime.H"
 #   include "createMesh.H"
-
-//    // Perform unit tests
-//    unitTests(mesh);
 
     // Create fields
     volScalarField alpha

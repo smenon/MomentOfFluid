@@ -25,79 +25,172 @@ License
 Implemented by
     Sandeep Menon
     University of Massachusetts Amherst
+    All rights reserved
 
 \*---------------------------------------------------------------------------*/
 
 namespace Foam
 {
 
-// * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
-
-// Compute clip-planes
-inline void tetIntersection::computeClipPlanes()
+namespace MoF
 {
-    // Define edge vectors
-    vector edge10 = clipTet_[1] - clipTet_[0];
-    vector edge20 = clipTet_[2] - clipTet_[0];
-    vector edge30 = clipTet_[3] - clipTet_[0];
-    vector edge21 = clipTet_[2] - clipTet_[1];
-    vector edge31 = clipTet_[3] - clipTet_[1];
 
-    // Cross-products
-    clipPlanes_[0].first() = (edge20 ^ edge10);
-    clipPlanes_[1].first() = (edge10 ^ edge30);
-    clipPlanes_[2].first() = (edge30 ^ edge20);
-    clipPlanes_[3].first() = (edge21 ^ edge31);
+// Decompose original cell into tetrahedra
+//  - Optionally transform points to a local
+//    coordinate system with the origin at xT.
+void decomposeCell
+(
+    const polyMesh& mesh,
+    const pointField& points,
+    const label cellIndex,
+    const point& xC,
+    DynamicList<Tetrahedron>& tetDecomp,
+    point xT
+)
+{
+    Tetrahedron tmpTetra;
 
-    // Normalize
-    clipPlanes_[0].first() /= mag(clipPlanes_[0].first()) + VSMALL;
-    clipPlanes_[1].first() /= mag(clipPlanes_[1].first()) + VSMALL;
-    clipPlanes_[2].first() /= mag(clipPlanes_[2].first()) + VSMALL;
-    clipPlanes_[3].first() /= mag(clipPlanes_[3].first()) + VSMALL;
+    // Clear list
+    tetDecomp.clear();
 
-    // Compute magnitude of clipping tetrahedron
-    clipTetMag_ = (1.0 / 6.0) * (edge10 & clipPlanes_[3].first());
+    // Fetch references to connectivity
+    const faceList& faces = mesh.faces();
+    const cell& dCell = mesh.cells()[cellIndex];
 
-    if (clipTetMag_ < 0.0)
+    // Check for tetrahedral cell
+    if (dCell.size() == 4)
     {
-        // Reverse normal directions
-        clipPlanes_[0].first() = -clipPlanes_[0].first();
-        clipPlanes_[1].first() = -clipPlanes_[1].first();
-        clipPlanes_[2].first() = -clipPlanes_[2].first();
-        clipPlanes_[3].first() = -clipPlanes_[3].first();
+        // Insert points of cell
+        const face& firstFace = faces[dCell[0]];
+        const face& secondFace = faces[dCell[1]];
 
-        // Reverse sign
-        clipTetMag_ = mag(clipTetMag_);
+        // Fill first three points
+        tmpTetra[0] = (points[firstFace[0]] - xT);
+        tmpTetra[1] = (points[firstFace[1]] - xT);
+        tmpTetra[2] = (points[firstFace[2]] - xT);
+
+        // Fill isolated fourth point
+        forAll(secondFace, pointI)
+        {
+            if
+            (
+                secondFace[pointI] != firstFace[0] &&
+                secondFace[pointI] != firstFace[1] &&
+                secondFace[pointI] != firstFace[2]
+            )
+            {
+                tmpTetra[3] = (points[secondFace[pointI]] - xT);
+                break;
+            }
+        }
+
+        // Add tet to decomposition list
+        tetDecomp.append(tmpTetra);
     }
+    else
+    {
+        // Decompose using face-cell decomposition
+        tmpTetra[3] = xC - xT;
 
-    // Determine plane constants
-    clipPlanes_[0].second() = (clipTet_[0] & clipPlanes_[0].first());
-    clipPlanes_[1].second() = (clipTet_[1] & clipPlanes_[1].first());
-    clipPlanes_[2].second() = (clipTet_[2] & clipPlanes_[2].first());
-    clipPlanes_[3].second() = (clipTet_[3] & clipPlanes_[3].first());
+        forAll(dCell, faceI)
+        {
+            const face& checkFace = faces[dCell[faceI]];
+
+            // Optimize for triangle faces
+            if (checkFace.size() == 3)
+            {
+                tmpTetra[0] = (points[checkFace[0]] - xT);
+                tmpTetra[1] = (points[checkFace[1]] - xT);
+                tmpTetra[2] = (points[checkFace[2]] - xT);
+
+                // Add tet to decomposition list
+                tetDecomp.append(tmpTetra);
+            }
+            else
+            {
+                // Pre-fill face centroid
+                tmpTetra[2] = (checkFace.centre(points) - xT);
+
+                forAll(checkFace, pI)
+                {
+                    tmpTetra[0] = (points[checkFace[pI]] - xT);
+                    tmpTetra[1] = (points[checkFace.nextLabel(pI)] - xT);
+
+                    // Add tet to decomposition list
+                    tetDecomp.append(tmpTetra);
+                }
+            }
+        }
+    }
 }
 
 
-// Split and decompose
-inline void tetIntersection::splitAndDecompose
+//- Evaluate and return volume / centroid
+void getVolumeAndCentre
 (
-    const label tetPlaneIndex,
-    FixedList<point, 4>& tetra,
-    DynamicList<FixedList<point, 4> >& decompTets
-) const
+    const DynamicList<Tetrahedron>& tets,
+    scalar& volume,
+    vector& centre
+)
 {
+    volume = 0.0;
+    centre = vector::zero;
+
+    forAll(tets, tetI)
+    {
+        const Tetrahedron& t = tets[tetI];
+
+        // Calculate volume (no check for orientation)
+        scalar tV =
+        (
+            Foam::mag
+            (
+                (1.0/6.0) *
+                (
+                    ((t[1] - t[0]) ^ (t[2] - t[0])) & (t[3] - t[0])
+                )
+            )
+        );
+
+        // Calculate centroid
+        vector tC = (0.25 * (t[0] + t[1] + t[2] + t[3]));
+
+        volume += tV;
+        centre += (tV * tC);
+    }
+
+    centre /= volume + VSMALL;
+}
+
+
+// Split and decompose tetrahedron with supplied plane using
+// the tetrahedron / half-space algorithm given in:
+//
+//   D.H. Eberly, 3D Game Engine Design: A Practical Approach to Real-time
+//   Computer Graphics, Morgan Kaufmann, 2001.
+//
+//   Geometric Tools, LLC
+//   Distributed under the Boost Software License, Version 1.0.
+//   http://www.boost.org/LICENSE_1_0.txt
+//
+void splitAndDecompose
+(
+    const hPlane& clipPlane,
+    const Tetrahedron& tet,
+    DynamicList<Tetrahedron>& decompTets
+)
+{
+    MoF::Tetrahedron tmpTetra;
+    MoF::Tetrahedron tetra(tet);
+
     FixedList<scalar, 4> C;
-    FixedList<vector, 4> tmpTetra;
     FixedList<label, 4> pos, neg, zero;
     label i = 0, nPos = 0, nNeg = 0, nZero = 0;
-
-    // Fetch reference to plane
-    const hPlane& tetPlane = clipPlanes_[tetPlaneIndex];
 
     for (i = 0; i < 4; ++i)
     {
         // Compute distance to plane
-        C[i] = (tetra[i] & tetPlane.first()) - tetPlane.second();
+        C[i] = (tetra[i] & clipPlane.first()) - clipPlane.second();
 
         if (C[i] > 0.0)
         {
@@ -281,107 +374,9 @@ inline void tetIntersection::splitAndDecompose
 }
 
 
-// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
-
-inline tetIntersection::tetIntersection(const FixedList<point, 4>& clipTet)
-:
-    clipTet_(clipTet),
-    clipTetMag_(0.0),
-    inside_(10),
-    allTets_(10)
-{
-    // Pre-compute clipping planes
-    computeClipPlanes();
-}
+} // End namespace MoF
 
 
-// * * * * * * * * * * * * * * * * Destructor  * * * * * * * * * * * * * * * //
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-inline tetIntersection::~tetIntersection()
-{}
-
-
-// * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
-
-// Return magnitude of clipping tetrahedron
-inline scalar tetIntersection::clipTetMag() const
-{
-    return clipTetMag_;
-}
-
-
-// Evaluate for intersections
-inline bool tetIntersection::evaluate(const FixedList<point, 4>& subjectTet)
-{
-    // Clear lists
-    inside_.clear();
-    allTets_.clear();
-
-    // Add initial tetrahedron to list
-    allTets_.append(subjectTet);
-
-    // Clip second tetrahedron against planes of clipping tetrahedron
-    for (label i = 0; i < 4; i++)
-    {
-        forAll(allTets_, tetI)
-        {
-            splitAndDecompose(i, allTets_[tetI], inside_);
-        }
-
-        // Prep for next clipping plane
-        allTets_ = inside_;
-        inside_.clear();
-    }
-
-    return (allTets_.size() > 0);
-}
-
-
-// Return intersections
-inline const DynamicList<FixedList<point, 4> >&
-tetIntersection::getIntersection() const
-{
-    return allTets_;
-}
-
-
-//- Evaluate and return volume / centroid
-inline void tetIntersection::getVolumeAndCentre
-(
-    scalar& volume,
-    vector& centre
-) const
-{
-    volume = 0.0;
-    centre = vector::zero;
-
-    forAll(allTets_, tetI)
-    {
-        const FixedList<point, 4>& t = allTets_[tetI];
-
-        // Calculate volume (no check for orientation)
-        scalar tV =
-        (
-            Foam::mag
-            (
-                (1.0/6.0) *
-                (
-                    ((t[1] - t[0]) ^ (t[2] - t[0])) & (t[3] - t[0])
-                )
-            )
-        );
-
-        // Calculate centroid
-        vector tC = (0.25 * (t[0] + t[1] + t[2] + t[3]));
-
-        volume += tV;
-        centre += (tV * tC);
-    }
-
-    centre /= volume + VSMALL;
-}
-
-
-}
-
-// ************************************************************************* //
+} // End namespace Foam

@@ -2,6 +2,7 @@
 .project
 .cproject
 .settings
+.autotools
 
 # Ignore build files
 *.dep

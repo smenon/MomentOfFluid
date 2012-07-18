@@ -46,98 +46,6 @@ using namespace Foam;
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-typedef FixedList<point, 4> Tetrahedron;
-
-void decomposeCell
-(
-    const fvMesh& mesh,
-    const label cellIndex,
-    DynamicList<Tetrahedron>& tetDecomp
-)
-{
-    // Clear list
-    tetDecomp.clear();
-
-    // Fetch references to connectivity
-    const faceList& faces = mesh.faces();
-    const cell& dCell = mesh.cells()[cellIndex];
-
-    // Fetch references to geometry
-    const pointField& points = mesh.points();
-
-    Tetrahedron tmpTetra;
-
-    // Check for tetrahedral cell
-    if (dCell.size() == 4)
-    {
-        // Insert points of cell
-        const face& firstFace = faces[dCell[0]];
-        const face& secondFace = faces[dCell[1]];
-
-        // Fill first three points
-        tmpTetra[0] = points[firstFace[0]];
-        tmpTetra[1] = points[firstFace[1]];
-        tmpTetra[2] = points[firstFace[2]];
-
-        // Fill isolated fourth point
-        forAll(secondFace, pointI)
-        {
-            if
-            (
-                secondFace[pointI] != firstFace[0] &&
-                secondFace[pointI] != firstFace[1] &&
-                secondFace[pointI] != firstFace[2]
-            )
-            {
-                tmpTetra[3] = points[secondFace[pointI]];
-                break;
-            }
-        }
-
-        // Add tet to decomposition list
-        tetDecomp.append(tmpTetra);
-    }
-    else
-    {
-        // Decompose using face-cell decomposition
-        const pointField& fC = mesh.faceCentres();
-        const point& xC = mesh.cellCentres()[cellIndex];
-
-        tmpTetra[3] = xC;
-
-        forAll(dCell, faceI)
-        {
-            const face& checkFace = faces[dCell[faceI]];
-
-            // Optimize for triangle faces
-            if (checkFace.size() == 3)
-            {
-                tmpTetra[0] = points[checkFace[0]];
-                tmpTetra[1] = points[checkFace[1]];
-                tmpTetra[2] = points[checkFace[2]];
-
-                // Add tet to decomposition list
-                tetDecomp.append(tmpTetra);
-            }
-            else
-            {
-                // Pre-fill face centroid
-                tmpTetra[2] = fC[dCell[faceI]];
-
-                forAll(checkFace, pI)
-                {
-                    tmpTetra[0] = points[checkFace[pI]];
-                    tmpTetra[1] = points[checkFace.nextLabel(pI)];
-
-                    // Add tet to decomposition list
-                    tetDecomp.append(tmpTetra);
-                }
-            }
-        }
-    }
-}
-
-
 // Calculate and populate fields
 void initAlphaField
 (
@@ -150,6 +58,9 @@ void initAlphaField
     // Set reference to target points / cells
     const cellList& tgtCells = meshTarget.cells();
     const pointField& tgtPoints = meshTarget.points();
+
+    // Fetch references to centres
+    const pointField& srcCentres = meshSource.cellCentres();
     const pointField& tgtCentres = meshTarget.cellCentres();
 
     // Set reference to source cellCells
@@ -159,19 +70,20 @@ void initAlphaField
     const indexedOctree<treeDataCell>& tree = meshSource.cellTree();
 
     // Tet decomposition of cells
-    DynamicList<Tetrahedron> srcDecomp(10);
-    DynamicList<Tetrahedron> tgtDecomp(10);
+    DynamicList<MoF::Tetrahedron> srcDecomp(10);
+    DynamicList<MoF::Tetrahedron> tgtDecomp(10);
 
     forAll(tgtCells, cellI)
     {
         const cell& tgtCell = tgtCells[cellI];
-        const labelList pLabels(tgtCell.labels(meshTarget.faces()));
 
         // Find nearest source cell
         label nearest = tree.findInside(tgtCentres[cellI]);
 
         if (nearest == -1)
         {
+            const labelList pLabels(tgtCell.labels(meshTarget.faces()));
+
             forAll(pLabels, pI)
             {
                 if ((nearest = tree.findInside(tgtPoints[pLabels[pI]])) > -1)
@@ -198,7 +110,14 @@ void initAlphaField
         scalar tgtVolume = meshTarget.cellVolumes()[cellI];
 
         // Decompose target cell, if necessary
-        decomposeCell(meshTarget, cellI, tgtDecomp);
+        MoF::decomposeCell
+        (
+            meshTarget,
+            meshTarget.points(),
+            cellI,
+            tgtCentres[cellI],
+            tgtDecomp
+        );
 
         // Initialize target intersectors
         PtrList<tetIntersection> tgtInt(tgtDecomp.size());
@@ -259,13 +178,20 @@ void initAlphaField
                     }
 
                     // Decompose source cell, if necessary.
-                    decomposeCell(meshSource, checkEntity, srcDecomp);
+                    MoF::decomposeCell
+                    (
+                        meshSource,
+                        meshSource.points(),
+                        checkEntity,
+                        srcCentres[checkEntity],
+                        srcDecomp
+                    );
 
                     bool anyIntersects = false;
 
                     forAll(srcDecomp, tetI)
                     {
-                        const Tetrahedron& tetraI = srcDecomp[tetI];
+                        const MoF::Tetrahedron& tetraI = srcDecomp[tetI];
 
                         forAll(tgtDecomp, tetJ)
                         {
@@ -280,7 +206,12 @@ void initAlphaField
                                 vector centre = vector::zero;
 
                                 // Get volume / centroid
-                                tJ.getVolumeAndCentre(volume, centre);
+                                MoF::getVolumeAndCentre
+                                (
+                                    tJ.getIntersection(),
+                                    volume,
+                                    centre
+                                );
 
                                 // Accumulate result
                                 tgtAlpha += volume;

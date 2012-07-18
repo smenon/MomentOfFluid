@@ -37,7 +37,6 @@ Author
 
 #include "Time.H"
 #include "OFstream.H"
-#include "polyMesh.H"
 #include "tensor2D.H"
 
 #include "MomentOfFluid.H"
@@ -58,313 +57,16 @@ static scalar cbrteps_ = 6.0554e-06;
 
 // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
 
-// Decompose original cell into tetrahedra
-//  - Transform points to a local coordinate system
-//    with the origin at the cell centroid.
-void MomentOfFluid::decomposeCell(const label& cellIndex)
-{
-    Tetrahedron tmpTetra;
-
-    // Clear existing decomposition
-    tetDecomp_.clear();
-
-    // Fetch references to connectivity
-    const faceList& faces = mesh_.faces();
-    const cell& clipCell = mesh_.cells()[cellIndex];
-
-    // Fetch references to geometry
-    const pointField& points = mesh_.points();
-    const pointField& fC = mesh_.faceCentres();
-    const point& xC = mesh_.cellCentres()[cellIndex];
-
-    // Check for tetrahedral cell
-    if (clipCell.size() == 4)
-    {
-        // Insert points of cell
-        const face& firstFace = faces[clipCell[0]];
-        const face& secondFace = faces[clipCell[1]];
-
-        // Fill first three points
-        tmpTetra[0] = (points[firstFace[0]] - xC);
-        tmpTetra[1] = (points[firstFace[1]] - xC);
-        tmpTetra[2] = (points[firstFace[2]] - xC);
-
-        // Fill isolated fourth point
-        forAll(secondFace, pointI)
-        {
-            if
-            (
-                secondFace[pointI] != firstFace[0] &&
-                secondFace[pointI] != firstFace[1] &&
-                secondFace[pointI] != firstFace[2]
-            )
-            {
-                tmpTetra[3] = (points[secondFace[pointI]] - xC);
-                break;
-            }
-        }
-
-        // Add tet to decomposition list
-        tetDecomp_.append(tmpTetra);
-    }
-    else
-    {
-        // Decompose using face-cell decomposition
-        tmpTetra[3] = vector::zero;
-
-        forAll(clipCell, faceI)
-        {
-            const face& checkFace = faces[clipCell[faceI]];
-
-            // Optimize for triangle faces
-            if (checkFace.size() == 3)
-            {
-                tmpTetra[0] = (points[checkFace[0]] - xC);
-                tmpTetra[1] = (points[checkFace[1]] - xC);
-                tmpTetra[2] = (points[checkFace[2]] - xC);
-
-                // Add tet to decomposition list
-                tetDecomp_.append(tmpTetra);
-            }
-            else
-            {
-                // Pre-fill face centroid
-                tmpTetra[2] = (fC[clipCell[faceI]] - xC);
-
-                forAll(checkFace, pI)
-                {
-                    tmpTetra[0] = (points[checkFace[pI]] - xC);
-                    tmpTetra[1] = (points[checkFace.nextLabel(pI)] - xC);
-
-                    // Add tet to decomposition list
-                    tetDecomp_.append(tmpTetra);
-                }
-            }
-        }
-    }
-}
-
-
-// Split and decompose tetrahedron with supplied plane using
-// the tetrahedron / half-space algorithm given in:
-//
-//   D.H. Eberly, 3D Game Engine Design: A Practical Approach to Real-time
-//   Computer Graphics, Morgan Kaufmann, 2001.
-//
-//   Geometric Tools, LLC
-//   Distributed under the Boost Software License, Version 1.0.
-//   http://www.boost.org/LICENSE_1_0.txt
-//
-void MomentOfFluid::splitAndDecompose
-(
-    const hPlane& clipPlane,
-    const Tetrahedron& tet
-)
-{
-    Tetrahedron tmpTetra;
-    Tetrahedron tetra(tet);
-
-    FixedList<scalar, 4> C;
-    FixedList<label, 4> pos, neg, zero;
-    label i = 0, nPos = 0, nNeg = 0, nZero = 0;
-
-    for (i = 0; i < 4; ++i)
-    {
-        // Compute distance to plane
-        C[i] = (tetra[i] & clipPlane.first()) - clipPlane.second();
-
-        if (C[i] > 0.0)
-        {
-            pos[nPos++] = i;
-        }
-        else
-        if (C[i] < 0.0)
-        {
-            neg[nNeg++] = i;
-        }
-        else
-        {
-            zero[nZero++] = i;
-        }
-    }
-
-    if (nNeg == 0)
-    {
-        return;
-    }
-
-    if (nPos == 0)
-    {
-        allTets_.append(tetra);
-        return;
-    }
-
-    // Tetrahedron is split by plane.  Determine how it is split and how to
-    // decompose the negative-side portion into tetrahedra (6 cases).
-    scalar w0, w1, invCDiff;
-    vector intp[4];
-
-    if (nPos == 3)
-    {
-        // +++-
-        for (i = 0; i < nPos; ++i)
-        {
-            invCDiff = (1.0 / (C[pos[i]] - C[neg[0]]));
-
-            w0 = -C[neg[0]] * invCDiff;
-            w1 = +C[pos[i]] * invCDiff;
-
-            tetra[pos[i]] = (w0 * tetra[pos[i]]) + (w1 * tetra[neg[0]]);
-        }
-
-        allTets_.append(tetra);
-    }
-    else
-    if (nPos == 2)
-    {
-        if (nNeg == 2)
-        {
-            // ++--
-            for (i = 0; i < nPos; ++i)
-            {
-                invCDiff = (1.0 / (C[pos[i]] - C[neg[0]]));
-
-                w0 = -C[neg[0]] * invCDiff;
-                w1 = +C[pos[i]] * invCDiff;
-
-                intp[i] = (w0 * tetra[pos[i]]) + (w1 * tetra[neg[0]]);
-            }
-
-            for (i = 0; i < nNeg; ++i)
-            {
-                invCDiff = (1.0 / (C[pos[i]] - C[neg[1]]));
-
-                w0 = -C[neg[1]] * invCDiff;
-                w1 = +C[pos[i]] * invCDiff;
-
-                intp[i+2] = (w0 * tetra[pos[i]]) + (w1 * tetra[neg[1]]);
-            }
-
-            tetra[pos[0]] = intp[2];
-            tetra[pos[1]] = intp[1];
-
-            allTets_.append(tetra);
-
-            tmpTetra[0] = tetra[neg[1]];
-            tmpTetra[1] = intp[3];
-            tmpTetra[2] = intp[2];
-            tmpTetra[3] = intp[1];
-
-            allTets_.append(tmpTetra);
-
-            tmpTetra[0] = tetra[neg[0]];
-            tmpTetra[1] = intp[0];
-            tmpTetra[2] = intp[1];
-            tmpTetra[3] = intp[2];
-
-            allTets_.append(tmpTetra);
-        }
-        else
-        {
-            // ++-0
-            for (i = 0; i < nPos; ++i)
-            {
-                invCDiff = (1.0 / (C[pos[i]] - C[neg[0]]));
-
-                w0 = -C[neg[0]] * invCDiff;
-                w1 = +C[pos[i]] * invCDiff;
-
-                tetra[pos[i]] = (w0 * tetra[pos[i]]) + (w1 * tetra[neg[0]]);
-            }
-
-            allTets_.append(tetra);
-        }
-    }
-    else
-    if (nPos == 1)
-    {
-        if (nNeg == 3)
-        {
-            // +---
-            for (i = 0; i < nNeg; ++i)
-            {
-                invCDiff = (1.0 / (C[pos[0]] - C[neg[i]]));
-
-                w0 = -C[neg[i]] * invCDiff;
-                w1 = +C[pos[0]] * invCDiff;
-
-                intp[i] = (w0 * tetra[pos[0]]) + (w1 * tetra[neg[i]]);
-            }
-
-            tetra[pos[0]] = intp[0];
-
-            allTets_.append(tetra);
-
-            tmpTetra[0] = intp[0];
-            tmpTetra[1] = tetra[neg[1]];
-            tmpTetra[2] = tetra[neg[2]];
-            tmpTetra[3] = intp[1];
-
-            allTets_.append(tmpTetra);
-
-            tmpTetra[0] = tetra[neg[2]];
-            tmpTetra[1] = intp[1];
-            tmpTetra[2] = intp[2];
-            tmpTetra[3] = intp[0];
-
-            allTets_.append(tmpTetra);
-        }
-        else
-        if (nNeg == 2)
-        {
-            // +--0
-            for (i = 0; i < nNeg; ++i)
-            {
-                invCDiff = (1.0 / (C[pos[0]] - C[neg[i]]));
-
-                w0 = -C[neg[i]] * invCDiff;
-                w1 = +C[pos[0]] * invCDiff;
-
-                intp[i] = (w0 * tetra[pos[0]]) + (w1 * tetra[neg[i]]);
-            }
-
-            tetra[pos[0]] = intp[0];
-
-            allTets_.append(tetra);
-
-            tmpTetra[0] = intp[1];
-            tmpTetra[1] = tetra[zero[0]];
-            tmpTetra[2] = tetra[neg[1]];
-            tmpTetra[3] = intp[0];
-
-            allTets_.append(tmpTetra);
-        }
-        else
-        {
-            // +-00
-            invCDiff = (1.0 / (C[pos[0]] - C[neg[0]]));
-
-            w0 = -C[neg[0]] * invCDiff;
-            w1 = +C[pos[0]] * invCDiff;
-
-            tetra[pos[0]] = (w0 * tetra[pos[0]]) + (w1 * tetra[neg[0]]);
-
-            allTets_.append(tetra);
-        }
-    }
-}
-
-
 // Extract triangles using plane info
 //  - Modified version of splitAndDecompose
 void MomentOfFluid::extractTriangulation
 (
     const vector& xC,
-    const hPlane& clipPlane,
-    const Tetrahedron& tetra
+    const MoF::hPlane& clipPlane,
+    const MoF::Tetrahedron& tetra
 )
 {
-    Triangle tmpTri;
+    MoF::Triangle tmpTri;
 
     FixedList<scalar, 4> C;
     FixedList<label, 4> pos, neg, zero;
@@ -539,50 +241,18 @@ scalar MomentOfFluid::evaluate
     // Clip tetrahedra against the plane
     forAll(tetDecomp_, tetI)
     {
-        splitAndDecompose(plane, tetDecomp_[tetI]);
+        MoF::splitAndDecompose
+        (
+            plane,
+            tetDecomp_[tetI],
+            allTets_
+        );
     }
 
     // Compute quantities
-    getVolumeAndCentre(volume, centre);
+    MoF::getVolumeAndCentre(allTets_, volume, centre);
 
     return volume;
-}
-
-
-//- Evaluate and return volume / centroid
-void MomentOfFluid::getVolumeAndCentre
-(
-    scalar& volume,
-    vector& centre
-) const
-{
-    volume = 0.0;
-    centre = vector::zero;
-
-    forAll(allTets_, tetI)
-    {
-        const Tetrahedron& t = allTets_[tetI];
-
-        // Calculate volume (no check for orientation)
-        scalar tV =
-        (
-            Foam::mag
-            (
-                (1.0/6.0) *
-                (
-                    ((t[1] - t[0]) ^ (t[2] - t[0])) & (t[3] - t[0])
-                )
-            )
-        );
-
-        // Calculate centroid
-        vector tC = (0.25 * (t[0] + t[1] + t[2] + t[3]));
-
-        volume += tV;
-        centre += (tV * tC);
-    }
-
-    centre /= volume + VSMALL;
 }
 
 
@@ -714,7 +384,7 @@ scalar MomentOfFluid::matchFraction
     {
         forAll(tetDecomp_, tetI)
         {
-            const Tetrahedron& tet = tetDecomp_[tetI];
+            const MoF::Tetrahedron& tet = tetDecomp_[tetI];
 
             forAll(tet, pointI)
             {
@@ -732,8 +402,8 @@ scalar MomentOfFluid::matchFraction
         dMax = *gdMax;
 
         // Evaluate function at guesses
-        fdMin = (evaluate(hPlane(normal, dMin), centre) / volume);
-        fdMax = (evaluate(hPlane(normal, dMax), centre) / volume);
+        fdMin = (evaluate(MoF::hPlane(normal, dMin), centre) / volume);
+        fdMax = (evaluate(MoF::hPlane(normal, dMax), centre) / volume);
 
         fEvals += 2;
     }
@@ -777,7 +447,7 @@ scalar MomentOfFluid::matchFraction
         }
 
         // Compute functional
-        fd = (evaluate(hPlane(normal, d), centre) / volume) - fraction;
+        fd = (evaluate(MoF::hPlane(normal, d), centre) / volume) - fraction;
 
         // Compute error
         error = Foam::mag(fd);
@@ -847,6 +517,93 @@ scalar MomentOfFluid::matchFraction
     }
 
     return d;
+}
+
+
+// Optimize for normal / centroid given a reference value
+void MomentOfFluid::optimizeCentroid
+(
+    const label& cellIndex,
+    const scalar& fraction,
+    const vector& refCentre,
+    vector& normal,
+    vector& centre
+)
+{
+    const vector& xC = mesh_.cellCentres()[cellIndex];
+
+    // Decompose cell, transforming to cell centroid
+    MoF::decomposeCell
+    (
+        mesh_,
+        mesh_.points(),
+        cellIndex,
+        xC,
+        tetDecomp_,
+        xC
+    );
+
+    scalar distance = 0.0;
+
+    // Make an initial guess for the normal
+    vector iNormal = (xC - refCentre);
+
+    iNormal /= mag(iNormal) + VSMALL;
+
+    // Convert components to spherical coordinates
+    scalar theta = acos(iNormal.z());
+    scalar phi = atan2(iNormal.y(), iNormal.x());
+
+    // Prepare inputs to BFGS
+    vector2D x(theta, phi);
+
+    // Prepare data
+    optInfo data
+    (
+        *this,
+        cellIndex,
+        fraction,
+        refCentre,
+        centre,
+        distance
+    );
+
+    if (debug)
+    {
+        Info<< " Initial: " << iNormal << nl
+            << "   Theta: " << theta << nl
+            << "   Phi: " << phi << endl;
+    }
+
+    // Call the bfgs algorithm
+    scalar fnVal = BFGS(x, data);
+
+    // Update result
+    normal = sphericalToCartesian(x[0], x[1]);
+
+    if (debug)
+    {
+        Info<< " Final: " << nl
+            << "  Functional: " << fnVal << nl
+            << "  Normal: " << normal << nl
+            << "  Centre: " << centre << nl
+            << "  Distance: " << distance << nl
+            << endl;
+    }
+
+    // Output triangulation
+    if (debug)
+    {
+        forAll(tetDecomp_, tetI)
+        {
+            extractTriangulation
+            (
+                xC,
+                MoF::hPlane(normal, distance),
+                tetDecomp_[tetI]
+            );
+        }
+    }
 }
 
 
@@ -1379,84 +1136,6 @@ MomentOfFluid::~MomentOfFluid()
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
 
-// Optimize for normal / centroid given a reference value
-void MomentOfFluid::optimizeCentroid
-(
-    const label& cellIndex,
-    const scalar& fraction,
-    const vector& refCentre,
-    vector& normal,
-    vector& centre
-)
-{
-    // Decompose cell
-    decomposeCell(cellIndex);
-
-    scalar distance = 0.0;
-    const vector& xC = mesh_.cellCentres()[cellIndex];
-
-    // Make an initial guess for the normal
-    vector iNormal = (xC - refCentre);
-
-    iNormal /= mag(iNormal) + VSMALL;
-
-    // Convert components to spherical coordinates
-    scalar theta = acos(iNormal.z());
-    scalar phi = atan2(iNormal.y(), iNormal.x());
-
-    // Prepare inputs to BFGS
-    vector2D x(theta, phi);
-
-    // Prepare data
-    optInfo data
-    (
-        *this,
-        cellIndex,
-        fraction,
-        refCentre,
-        centre,
-        distance
-    );
-
-    if (debug)
-    {
-        Info<< " Initial: " << iNormal << nl
-            << "   Theta: " << theta << nl
-            << "   Phi: " << phi << endl;
-    }
-
-    // Call the bfgs algorithm
-    scalar fnVal = BFGS(x, data);
-
-    // Update result
-    normal = sphericalToCartesian(x[0], x[1]);
-
-    if (debug)
-    {
-        Info<< " Final: " << nl
-            << "  Functional: " << fnVal << nl
-            << "  Normal: " << normal << nl
-            << "  Centre: " << centre << nl
-            << "  Distance: " << distance << nl
-            << endl;
-    }
-
-    // Output triangulation
-    if (debug)
-    {
-        forAll(tetDecomp_, tetI)
-        {
-            extractTriangulation
-            (
-                xC,
-                hPlane(normal, distance),
-                tetDecomp_[tetI]
-            );
-        }
-    }
-}
-
-
 void MomentOfFluid::constructInterface
 (
     const scalarField& fractions,
@@ -1466,8 +1145,7 @@ void MomentOfFluid::constructInterface
     vector normal = vector::zero;
     vector centre = vector::zero;
 
-    scalar minBound = 1e-13;
-    scalar maxBound = 0.999999;
+    scalar minBound = 0.0, maxBound = 1.0;
 
     forAll(fractions, cellI)
     {
@@ -1511,7 +1189,7 @@ void MomentOfFluid::outputSurface() const
 
     forAll(allTris_, triI)
     {
-        const Triangle& tri = allTris_[triI];
+        const MoF::Triangle& tri = allTris_[triI];
 
         forAll(tri, i)
         {
@@ -1528,7 +1206,7 @@ void MomentOfFluid::outputSurface() const
 
     forAll(allTris_, triI)
     {
-        const Triangle& tri = allTris_[triI];
+        const MoF::Triangle& tri = allTris_[triI];
 
         file<< 3 << ' ';
 
