@@ -39,6 +39,7 @@ Author
 #include "fvCFD.H"
 #include "argList.H"
 #include "treeDataCell.H"
+#include "pointIndexHit.H"
 #include "indexedOctree.H"
 #include "tetIntersection.H"
 
@@ -55,76 +56,81 @@ void initAlphaField
     volVectorField& refCentres
 )
 {
+    // Initialize fields
+    scalarField& aiF = alpha.internalField();
+    vectorField& rCiF = refCentres.internalField();
+
+    aiF = 0.0;
+    rCiF = vector::zero;
+
     // Set reference to target points / cells
     const cellList& tgtCells = meshTarget.cells();
     const pointField& tgtPoints = meshTarget.points();
 
-    // Fetch references to centres
+    // Set reference to source points / cells
+    const cellList& srcCells = meshSource.cells();
+    const pointField& srcPoints = meshSource.points();
+
+    // Fetch references to centres / volumes
     const pointField& srcCentres = meshSource.cellCentres();
     const pointField& tgtCentres = meshTarget.cellCentres();
 
-    // Set reference to source cellCells
-    const labelListList& cc = meshSource.cellCells();
+    const scalarField& srcVolumes = meshSource.cellVolumes();
+    const scalarField& tgtVolumes = meshTarget.cellVolumes();
 
-    // Construct and fetch source cell-search tree
-    const indexedOctree<treeDataCell>& tree = meshSource.cellTree();
+    // Set reference to target cellCells
+    const labelListList& cc = meshTarget.cellCells();
+
+    // Construct and fetch target cell-search tree
+    const indexedOctree<treeDataCell>& tree = meshTarget.cellTree();
 
     // Tet decomposition of cells
     DynamicList<MoF::Tetrahedron> srcDecomp(10);
     DynamicList<MoF::Tetrahedron> tgtDecomp(10);
 
-    forAll(tgtCells, cellI)
+    forAll(srcCells, cellI)
     {
-        const cell& tgtCell = tgtCells[cellI];
-
-        // Find nearest source cell
-        label nearest = tree.findInside(tgtCentres[cellI]);
+        // Find nearest target cell
+        label nearest = tree.findInside(srcCentres[cellI]);
 
         if (nearest == -1)
         {
-            const labelList pLabels(tgtCell.labels(meshTarget.faces()));
-
-            forAll(pLabels, pI)
-            {
-                if ((nearest = tree.findInside(tgtPoints[pLabels[pI]])) > -1)
-                {
-                    break;
-                }
-            }
+            FatalErrorIn
+            (
+                "\n\n"
+                "void initAlphaField\n"
+                "(\n"
+                "    const fvMesh& meshSource,\n"
+                "    const fvMesh& meshTarget,\n"
+                "    volScalarField& alpha,\n"
+                "    volVectorField& refCentres\n"
+                ")\n"
+            )
+                << " Suitable target cell was not found." << nl
+                << " Index: " << cellI << nl
+                << abort(FatalError);
         }
-
-        // Assume outside and skip
-        if (nearest == -1)
-        {
-            alpha.internalField()[cellI] = 0.0;
-            refCentres.internalField()[cellI] = vector::zero;
-
-            continue;
-        }
-
-        // Found a candidate, commence search
-        scalar tgtAlpha = 0.0;
-        vector tgtRefCentre = vector::zero;
 
         // Fetch volume
-        scalar tgtVolume = meshTarget.cellVolumes()[cellI];
+        scalar volAlpha = 0.0;
+        scalar srcVolume = srcVolumes[cellI];
 
-        // Decompose target cell, if necessary
+        // Decompose source cell, if necessary
         MoF::decomposeCell
         (
-            meshTarget,
-            meshTarget.points(),
+            meshSource,
+            srcPoints,
             cellI,
-            tgtCentres[cellI],
-            tgtDecomp
+            srcCentres[cellI],
+            srcDecomp
         );
 
-        // Initialize target intersectors
-        PtrList<tetIntersection> tgtInt(tgtDecomp.size());
+        // Initialize source intersectors
+        PtrList<tetIntersection> srcInt(srcDecomp.size());
 
-        forAll(tgtInt, intI)
+        forAll(srcInt, intI)
         {
-            tgtInt.set(intI, new tetIntersection(tgtDecomp[intI]));
+            srcInt.set(intI, new tetIntersection(srcDecomp[intI]));
         }
 
         bool changed;
@@ -177,26 +183,26 @@ void initAlphaField
                         continue;
                     }
 
-                    // Decompose source cell, if necessary.
+                    // Decompose target cell, if necessary.
                     MoF::decomposeCell
                     (
-                        meshSource,
-                        meshSource.points(),
+                        meshTarget,
+                        tgtPoints,
                         checkEntity,
-                        srcCentres[checkEntity],
-                        srcDecomp
+                        tgtCentres[checkEntity],
+                        tgtDecomp
                     );
 
                     bool anyIntersects = false;
 
-                    forAll(srcDecomp, tetI)
+                    forAll(tgtDecomp, tetI)
                     {
-                        const MoF::Tetrahedron& tetraI = srcDecomp[tetI];
+                        const MoF::Tetrahedron& tetraI = tgtDecomp[tetI];
 
-                        forAll(tgtDecomp, tetJ)
+                        forAll(srcDecomp, tetJ)
                         {
                             // Intersect source / target tets
-                            tetIntersection& tJ = tgtInt[tetJ];
+                            tetIntersection& tJ = srcInt[tetJ];
 
                             bool intersect = tJ.evaluate(tetraI);
 
@@ -214,8 +220,9 @@ void initAlphaField
                                 );
 
                                 // Accumulate result
-                                tgtAlpha += volume;
-                                tgtRefCentre += (volume * centre);
+                                volAlpha += volume;
+                                aiF[checkEntity] += volume;
+                                rCiF[checkEntity] += (volume * centre);
 
                                 anyIntersects = true;
                             }
@@ -274,19 +281,31 @@ void initAlphaField
 
         } while (changed);
 
-        // Normalize
-        tgtRefCentre /= tgtAlpha + VSMALL;
-        tgtAlpha /= tgtVolume + VSMALL;
+        // Check if volume was completely enclosed
+        scalar error = Foam::mag(1.0 - (volAlpha / srcVolume));
 
-        // Fix over-fill
-        if (tgtAlpha > 1.0)
+        if (error > 1e-10)
         {
-            tgtAlpha = 1.0;
+            Info<< " Cell: " << cellI << nl
+                << "  Error: " << error << nl
+                << "  volAlpha: " << volAlpha << nl
+                << "  srcVolume: " << srcVolume << nl
+                << abort(FatalError);
         }
+    }
 
-        // Set accumulate result
-        alpha.internalField()[cellI] = tgtAlpha;
-        refCentres.internalField()[cellI] = tgtRefCentre;
+    // Normalize
+    forAll(tgtCells, cellI)
+    {
+        scalar& alpha = aiF[cellI];
+        vector& refCentre = rCiF[cellI];
+        scalar tgtVolume = tgtVolumes[cellI];
+
+        if (Foam::mag(alpha) > 0.0)
+        {
+            refCentre /= alpha;
+            alpha /= tgtVolume;
+        }
     }
 }
 

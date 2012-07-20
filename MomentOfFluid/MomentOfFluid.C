@@ -659,8 +659,15 @@ scalar MomentOfFluid::minimizeAlpha
     // Check roots if they're real
     if (delta >= 0.0)
     {
-        roots[0] = (-b + Foam::sqrt(delta)) / (2.0 * a);
-        roots[1] = (-b - Foam::sqrt(delta)) / (2.0 * a);
+        if (mag(a) < VSMALL)
+        {
+            roots[0] = roots[1] = (-c / b);
+        }
+        else
+        {
+            roots[0] = (-b + Foam::sqrt(delta)) / (2.0 * a);
+            roots[1] = (-b - Foam::sqrt(delta)) / (2.0 * a);
+        }
 
         if (lb <= roots[1] && roots[1] <= ub)
         {
