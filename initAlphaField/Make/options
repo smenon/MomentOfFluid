@@ -1,6 +1,8 @@
 EXE_INC = \
     -I../include \
+    -I$(LIB_SRC)/meshTools/lnInclude \
     -I$(LIB_SRC)/finiteVolume/lnInclude
 
 EXE_LIBS = \
+    -lmeshTools \
     -lfiniteVolume

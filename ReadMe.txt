@@ -1,7 +1,7 @@
 MomentOfFluid - An implementation of the Moment-of-Fluid method for OpenFOAM.
 
 Copyright Information
-    Copyright (C) 2012 Sandeep Menon, University of Massachusetts Amherst.
+    Copyright (C) 2012-2015 Sandeep Menon, University of Massachusetts Amherst.
 
 License
     This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ Description
     ISSN 0021-9991, 10.1016/j.jcp.2007.06.033.
 
 Target platform
-    This code is known to work with OpenFOAM-2.1.x
+    This code is known to work with OpenFOAM-2.3.x
 
 Author
     Sandeep Menon
